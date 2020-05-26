@@ -15,7 +15,8 @@ from leapp.messaging.answerstore import AnswerStore
 from leapp.repository.scan import find_and_scan_repositories
 from leapp.utils.audit import Execution, get_connection, get_checkpoints
 from leapp.utils.clicmd import command, command_opt
-from leapp.utils.output import report_errors, report_info, beautify_actor_exception, report_unsupported
+from leapp.utils.output import (report_errors, report_info, beautify_actor_exception, report_unsupported,
+                                report_inhibitors)
 from leapp.utils.report import fetch_upgrade_report_messages, generate_report_file
 
 
@@ -141,11 +142,11 @@ def handle_output_level(args):
     """
     Set environment variables following command line arguments.
     """
-    os.environ['LEAPP_DEBUG'] = '1' if args.debug else os.environ.get('LEAPP_DEBUG', '0')
+    os.environ['LEAPP_DEBUG'] = '1' if args.debug else os.getenv('LEAPP_DEBUG', '0')
     if os.environ['LEAPP_DEBUG'] == '1' or args.verbose:
         os.environ['LEAPP_VERBOSE'] = '1'
     else:
-        os.environ['LEAPP_VERBOSE'] = os.environ.get('LEAPP_VERBOSE', '0')
+        os.environ['LEAPP_VERBOSE'] = os.getenv('LEAPP_VERBOSE', '0')
 
 
 def prepare_configuration(args):
@@ -156,10 +157,16 @@ def prepare_configuration(args):
     else:
         os.environ['LEAPP_EXPERIMENTAL'] = '0'
     os.environ['LEAPP_UNSUPPORTED'] = '0' if os.getenv('LEAPP_UNSUPPORTED', '0') == '0' else '1'
+    if args.no_rhsm:
+        os.environ['LEAPP_NO_RHSM'] = '1'
+    elif os.getenv('LEAPP_NO_RHSM') != '1':
+        os.environ['LEAPP_NO_RHSM'] = os.getenv('LEAPP_DEVEL_SKIP_RHSM', '0')
+    if args.enablerepo:
+        os.environ['LEAPP_ENABLE_REPOS'] = ','.join(args.enablerepo)
     configuration = {
         'debug': os.getenv('LEAPP_DEBUG', '0'),
         'verbose': os.getenv('LEAPP_VERBOSE', '0'),
-        'whitelist_experimental': args.whitelist_experimental or ()
+        'whitelist_experimental': args.whitelist_experimental or (),
     }
     return configuration
 
@@ -176,12 +183,16 @@ def process_whitelist_experimental(repositories, workflow, configuration, logger
             raise CommandError(msg)
 
 
-@command('upgrade', help='Upgrades the current system to the next available major version.')
+@command('upgrade', help='Upgrade the current system to the next available major version.')
 @command_opt('resume', is_flag=True, help='Continue the last execution after it was stopped (e.g. after reboot)')
 @command_opt('reboot', is_flag=True, help='Automatically performs reboot when requested.')
-@command_opt('whitelist-experimental', action='append', metavar='ActorName', help='Enables experimental actors')
+@command_opt('whitelist-experimental', action='append', metavar='ActorName', help='Enable experimental actors')
 @command_opt('debug', is_flag=True, help='Enable debug mode', inherit=False)
 @command_opt('verbose', is_flag=True, help='Enable verbose logging', inherit=False)
+@command_opt('no-rhsm', is_flag=True, help='Use only custom repositories and skip actions'
+                                           ' with Red Hat Subscription Manager')
+@command_opt('enablerepo', action='append', metavar='<repoid>',
+             help='Enable specified repository. Can be used multiple times.')
 def upgrade(args):
     skip_phases_until = None
     context = str(uuid.uuid4())
@@ -229,11 +240,14 @@ def upgrade(args):
         workflow.load_answers(answerfile_path, userchoices_path)
         workflow.run(context=context, skip_phases_until=skip_phases_until, skip_dialogs=True)
 
+    logger.info("Answerfile will be created at %s", answerfile_path)
+    workflow.save_answers(answerfile_path, userchoices_path)
     report_errors(workflow.errors)
+    report_inhibitors(context)
     generate_report_files(context)
     report_files = get_cfg_files('report', cfg)
     log_files = get_cfg_files('logs', cfg)
-    report_info(report_files, log_files, fail=workflow.failure)
+    report_info(report_files, log_files, answerfile_path, fail=workflow.failure)
 
     if workflow.failure:
         sys.exit(1)
@@ -243,6 +257,10 @@ def upgrade(args):
 @command_opt('whitelist-experimental', action='append', metavar='ActorName', help='Enables experimental actors')
 @command_opt('debug', is_flag=True, help='Enable debug mode', inherit=False)
 @command_opt('verbose', is_flag=True, help='Enable verbose logging', inherit=False)
+@command_opt('no-rhsm', is_flag=True, help='Use only custom repositories and skip actions'
+                                           ' with Red Hat Subscription Manager')
+@command_opt('enablerepo', action='append', metavar='<repoid>',
+             help='Enable specified repository. Can be used multiple times.')
 def preupgrade(args):
     context = str(uuid.uuid4())
     cfg = get_config()
@@ -276,6 +294,7 @@ def preupgrade(args):
     workflow.save_answers(answerfile_path, userchoices_path)
     generate_report_files(context)
     report_errors(workflow.errors)
+    report_inhibitors(context)
     report_files = get_cfg_files('report', cfg)
     log_files = get_cfg_files('logs', cfg)
     report_info(report_files, log_files, answerfile_path, fail=workflow.failure)

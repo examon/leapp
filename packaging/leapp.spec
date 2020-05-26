@@ -13,7 +13,7 @@
 # This is kind of help for more flexible development of leapp repository,
 # so people do not have to wait for new official release of leapp to ensure
 # it is installed/used the compatible one.
-%global framework_version 1.0
+%global framework_version 1.2
 
 # IMPORTANT: everytime the requirements are changed, increment number by one
 # - same for Provides in deps subpackage
@@ -32,7 +32,7 @@
 %endif
 
 Name:       leapp
-Version:    0.9.0
+Version:    0.10.0
 Release:    1%{?dist}
 Summary:    OS & Application modernization framework
 
